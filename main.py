@@ -11,7 +11,7 @@ data_gen_args = dict(rotation_range=0.2,
                     zoom_range=0.05,
                     horizontal_flip=True,
                     fill_mode='nearest')
-myGene = trainGenerator(2,'data/membrane/train','image','label',data_gen_args,save_to_dir = None)
+myGene = ImageMaskGenerator(2,'data/membrane/train','image','label',data_gen_args,save_to_dir = None)
 
 model = unet()
 model.compile(optimizer=Adam(lr=1e-4), loss='binary_crossentropy', metrics = ['accuracy'])

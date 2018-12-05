@@ -122,3 +122,134 @@ def saveResult(save_path,npyfile,flag_multi_class = False,num_class = 2):
     for i,item in enumerate(npyfile):
         img = labelVisualize(num_class,COLOR_DICT,item) if flag_multi_class else item[:,:,0]
         io.imsave(os.path.join(save_path,"%d_predict.png"%i),img)
+
+
+def preprocess_image(normalize_lighting=False, min_value=0., max_value=1.):
+    """
+    Wrapper preprocessing function for input images to handle additional parameters
+    :param normalize_lighting: whether to normalize image lighting through dividing each channel by its mean value
+    :param min_value: minimum value for rescaling interval
+    :param max_value: maximum value for rescaling interval
+    :return: preprocessing function to pass in the ImageDataGenerator
+    """
+    if min_value > max_value:
+        min_value, max_value = max_value, min_value
+    rescaling_range = max_value - min_value
+
+    def normalize_lighting_and_rescale(image):
+        # Normalize image lighting (this results in an image with values from [0.0; 1.0])
+        image = image / np.mean(image, axis=(0, 1))
+        image = image / image.max()
+        # Project values on [min_value; max_value]
+        image = image * rescaling_range + min_value
+        return image
+
+    def rescale(image):
+        if image.max() > 1:
+            # Project values interval on [0.0; 1.0]
+            image = image / 255.
+        # Project values on [min_value; max_value]
+        image = image * rescaling_range + min_value
+        return image
+
+    if normalize_lighting is True:
+        return normalize_lighting_and_rescale
+    else:
+        return rescale
+
+
+def preprocess_mask(min_value=0., max_value=1.):
+    """
+    Wrapper preprocessing function for mask images to handle additional parameters
+    :param min_value: minimum value for rescaling interval
+    :param max_value: maximum value for rescaling interval
+    :return: preprocessing function to pass in the ImageDataGenerator
+    """
+    if min_value > max_value:
+        min_value, max_value = max_value, min_value
+
+    def rescale(mask):
+        # Project values on [min_value; max_value]
+        new_mask = np.full_like(mask, min_value)
+        if mask.max() > 1:
+            new_mask[mask > 127.5] = max_value
+        else:
+            new_mask[mask > 0.5] = max_value
+        return new_mask
+
+    return rescale
+
+
+class ImageMaskGenerator:
+
+    def __init__(
+            self,
+            directory,
+            augmentation_args=None,
+            image_preprocessing=None,
+            mask_preprocessing=None,
+            target_size=(256, 256),
+            image_color_mode="grayscale",
+            mask_color_mode="grayscale",
+            image_subdirectory="image",
+            mask_subdirectory="label",
+            batch_size=2,
+            shuffle=True,
+            seed=None,
+            save_to_dir=None,
+            image_save_prefix="image_",
+            mask_save_prefix="label_",
+            save_format='png',
+            follow_links=False,
+            subset=None,
+            interpolation='nearest'
+    ):
+        self.batch_size = batch_size
+        self.seed = seed if seed is not None else np.random.randint(np.iinfo(np.int).min, np.iinfo(np.int).max)
+
+        image_args = dict(augmentation_args) if augmentation_args is not None else {}
+        image_args.update(preprocessing_function=image_preprocessing)
+        mask_args = dict(augmentation_args) if augmentation_args is not None else {}
+        mask_args.update(preprocessing_function=mask_preprocessing)
+        self.image_generator = ImageDataGenerator(**image_args).flow_from_directory(
+            directory,
+            target_size=target_size,
+            color_mode=image_color_mode,
+            classes=[image_subdirectory],
+            class_mode=None,
+            batch_size=self.batch_size,
+            shuffle=shuffle,
+            seed=self.seed,
+            save_to_dir=save_to_dir,
+            save_prefix=image_save_prefix,
+            save_format=save_format,
+            follow_links=follow_links,
+            subset=subset,
+            interpolation=interpolation
+        )
+        self.mask_generator = ImageDataGenerator(**mask_args).flow_from_directory(
+            directory,
+            target_size=target_size,
+            color_mode=mask_color_mode,
+            classes=[mask_subdirectory],
+            class_mode=None,
+            batch_size=self.batch_size,
+            shuffle=shuffle,
+            seed=self.seed,
+            save_to_dir=save_to_dir,
+            save_prefix=mask_save_prefix,
+            save_format=save_format,
+            follow_links=follow_links,
+            subset=subset,
+            interpolation=interpolation
+        )
+        if self.image_generator.samples != self.mask_generator.samples:
+            raise ValueError("Different number of images and masks.")
+        self.samples = self.image_generator.samples
+        self.image_shape = self.image_generator.image_shape
+        self.mask_shape = self.image_generator.image_shape
+
+    def __next__(self):
+        images = next(self.image_generator)
+        masks = next(self.mask_generator)
+        return images, masks
