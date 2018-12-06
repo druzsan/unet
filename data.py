@@ -136,18 +136,18 @@ def preprocess_image(normalize_lighting=False, min_value=0., max_value=1.):
         min_value, max_value = max_value, min_value
     rescaling_range = max_value - min_value
 
-    def normalize_lighting_and_rescale(image):
-        # Normalize image lighting (this results in an image with values from [0.0; 1.0])
-        image = image / np.mean(image, axis=(0, 1))
-        image = image / image.max()
-        # Project values on [min_value; max_value]
-        image = image * rescaling_range + min_value
-        return image
-
     def rescale(image):
         if image.max() > 1:
             # Project values interval on [0.0; 1.0]
             image = image / 255.
+        # Project values on [min_value; max_value]
+        image = image * rescaling_range + min_value
+        return image
+
+    def normalize_lighting_and_rescale(image):
+        # Normalize image lighting (this results in an image with values from [0.0; 1.0])
+        image = image / np.mean(image, axis=(0, 1))
+        image = image / image.max()
         # Project values on [min_value; max_value]
         image = image * rescaling_range + min_value
         return image
@@ -158,26 +158,18 @@ def preprocess_image(normalize_lighting=False, min_value=0., max_value=1.):
         return rescale
 
 
-def preprocess_mask(min_value=0., max_value=1.):
+def preprocess_mask(mask):
     """
-    Wrapper preprocessing function for mask images to handle additional parameters
-    :param min_value: minimum value for rescaling interval
-    :param max_value: maximum value for rescaling interval
-    :return: preprocessing function to pass in the ImageDataGenerator
+    Preprocessing function to pass in the ImageDataGenerator
     """
-    if min_value > max_value:
-        min_value, max_value = max_value, min_value
-
-    def rescale(mask):
-        # Project values on [min_value; max_value]
-        new_mask = np.full_like(mask, min_value)
-        if mask.max() > 1:
-            new_mask[mask > 127.5] = max_value
-        else:
-            new_mask[mask > 0.5] = max_value
-        return new_mask
-
-    return rescale
+    # Project values interval on [0.0; 1.0]
+    if mask.max() > 1:
+        mask[mask <= 127.5] = 0.
+        mask[mask > 127.5] = 1.
+    else:
+        mask[mask <= .5] = 0.
+        mask[mask > .5] = 1.
+    return mask
 
 
 class ImageMaskGenerator:
@@ -188,6 +180,7 @@ class ImageMaskGenerator:
             augmentation_args=None,
             image_preprocessing=None,
             mask_preprocessing=None,
+            background_as_class=False,
             target_size=(256, 256),
             image_color_mode="grayscale",
             mask_color_mode="grayscale",
@@ -204,7 +197,10 @@ class ImageMaskGenerator:
             subset=None,
             interpolation='nearest'
     ):
+        self.background_as_class = background_as_class
         self.batch_size = batch_size
+        # If no seed is given, it should be initialized as the same for both data generators
+        # in order to provide an image and its mask simultaneously
         self.seed = seed if seed is not None else np.random.randint(np.iinfo(np.int).min, np.iinfo(np.int).max)
 
         image_args = dict(augmentation_args) if augmentation_args is not None else {}
@@ -243,13 +239,28 @@ class ImageMaskGenerator:
             subset=subset,
             interpolation=interpolation
         )
+        # bath_size in both generators is forced to be the same,
+        # but there can be different number of samples in images and masks subdirectories
         if self.image_generator.samples != self.mask_generator.samples:
             raise ValueError("Different number of images and masks.")
         self.samples = self.image_generator.samples
         self.image_shape = self.image_generator.image_shape
-        self.mask_shape = self.image_generator.image_shape
+        self.mask_shape = (self.mask_generator.image_shape[0], self.mask_generator.image_shape[1],
+                           self.mask_generator.image_shape[2] + 1 if self.background_as_class is True else
+                           self.mask_generator.image_shape[2])
+        print(self.mask_shape)
 
     def __next__(self):
         images = next(self.image_generator)
         masks = next(self.mask_generator)
-        return images, masks
+        if self.background_as_class is True:
+            if masks.shape[-1] == 1:
+                # If there is only one class, background is negation of it
+                backgrounds = 1. - masks
+            else:
+                # If there are many classes, background is there where no one class is
+                backgrounds = 1. - masks.max(axis=-1, keepdims=True)
+            # Append background as first channel
+            return images, np.append(backgrounds, masks, axis=-1)
+        else:
+            return images, masks

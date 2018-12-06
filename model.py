@@ -10,7 +10,17 @@ from keras.callbacks import ModelCheckpoint, LearningRateScheduler
 from keras import backend as keras
 
 
-def unet(pretrained_weights=None, input_size=(256, 256, 1), top_activation=None):
+def unet(weights=None, input_size=(256, 256, 1), classes=1, background_as_class=False):
+    if background_as_class is True:
+        # Additional class for background
+        classes += 1
+        # Classes (and background) probabilities in each pixel are conditional dependent
+        top_activation = 'softmax'
+    else:
+        # Classes (and background) probabilities in each pixel are indepentent
+        # Some pixel is background if all classes activations in this pixel are nearly zeros
+        top_activation = 'sigmoid'
+
     inputs = Input(input_size)
     conv1 = Conv2D(64, 3, activation = 'relu', padding = 'same', kernel_initializer = 'he_normal')(inputs)
     conv1 = Conv2D(64, 3, activation = 'relu', padding = 'same', kernel_initializer = 'he_normal')(conv1)
@@ -49,13 +59,12 @@ def unet(pretrained_weights=None, input_size=(256, 256, 1), top_activation=None)
     merge9 = concatenate([conv1,up9], axis = 3)
     conv9 = Conv2D(64, 3, activation = 'relu', padding = 'same', kernel_initializer = 'he_normal')(merge9)
     conv9 = Conv2D(64, 3, activation = 'relu', padding = 'same', kernel_initializer = 'he_normal')(conv9)
-    conv9 = Conv2D(2, 3, activation = 'relu', padding = 'same', kernel_initializer = 'he_normal')(conv9)
-    conv10 = Conv2D(1, 1, activation = top_activation)(conv9)
+    conv9 = Conv2D(classes, 1, activation=top_activation, padding='same', kernel_initializer='he_normal')(conv9)
 
-    model = Model(inputs, conv10)
+    model = Model(inputs, conv9)
 
-    if pretrained_weights is not None:
-        model.load_weights(pretrained_weights)
+    if weights is not None:
+        model.load_weights(weights)
 
     return model
 
