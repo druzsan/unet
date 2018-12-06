@@ -24,7 +24,7 @@ class TestPredictor(callbacks.Callback):
             segmentations = np.array(results[..., 1:] * 255., dtype=np.uint8)
         else:
             segmentations = np.array(results * 255., dtype=np.uint8)
-        dst_dir = os.path.join(self.dst_path, "epoch_" + str(epoch + 1))
+        dst_dir = os.path.join(self.dst_path, "epoch_%03d" % (epoch + 1))
         if not os.path.isdir(dst_dir):
             os.makedirs(dst_dir)
         for filename, segmentation in zip(self.test_generator.filenames, segmentations):
