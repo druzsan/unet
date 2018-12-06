@@ -248,7 +248,6 @@ class ImageMaskGenerator:
         self.mask_shape = (self.mask_generator.image_shape[0], self.mask_generator.image_shape[1],
                            self.mask_generator.image_shape[2] + 1 if self.background_as_class is True else
                            self.mask_generator.image_shape[2])
-        print(self.mask_shape)
 
     def __next__(self):
         images = next(self.image_generator)
