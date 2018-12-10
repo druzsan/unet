@@ -24,6 +24,7 @@ def unet(weights=None, input_shape=(256, 256, 1), classes=1, background_as_class
         top_activation = 'sigmoid'
 
     inputs = layers.Input(input_shape)
+
     conv1 = layers.Conv2D(64, 3, activation='relu', padding='same', kernel_initializer='he_normal')(inputs)
     conv1 = layers.Conv2D(64, 3, activation='relu', padding='same', kernel_initializer='he_normal')(conv1)
     pool1 = layers.MaxPooling2D(pool_size=(2, 2))(conv1)
@@ -42,34 +43,22 @@ def unet(weights=None, input_shape=(256, 256, 1), classes=1, background_as_class
     conv5 = layers.Conv2D(1024, 3, activation='relu', padding='same', kernel_initializer='he_normal')(conv5)
     conv5 = layers.Dropout(0.5)(conv5)
 
-    # up6 = layers.UpSampling2D(size=(2, 2))(conv5)
-    # up6 = layers.Conv2D(512, 2, activation='relu', padding='same', kernel_initializer='he_normal')(up6)
-    up6 = layers.Conv2DTranspose(512, 2, strides=(2, 2), padding='valid',
-                                 activation='relu', kernel_initializer='he_normal')(conv5)
+    up6 = layers.Conv2DTranspose(512, 2, strides=(2, 2), activation='relu', kernel_initializer='he_normal')(conv5)
     merge6 = layers.concatenate([conv4, up6], axis=3)
     conv6 = layers.Conv2D(512, 3, activation='relu', padding='same', kernel_initializer='he_normal')(merge6)
     conv6 = layers.Conv2D(512, 3, activation='relu', padding='same', kernel_initializer='he_normal')(conv6)
 
-    # up7 = layers.UpSampling2D(size=(2, 2))(conv6)
-    # up7 = layers.Conv2D(256, 2, activation='relu', padding='same', kernel_initializer='he_normal')(up7)
-    up7 = layers.Conv2DTranspose(256, 2, strides=(2, 2), padding='valid',
-                                 activation='relu', kernel_initializer='he_normal')(conv6)
+    up7 = layers.Conv2DTranspose(256, 2, strides=(2, 2), activation='relu', kernel_initializer='he_normal')(conv6)
     merge7 = layers.concatenate([conv3, up7], axis=3)
     conv7 = layers.Conv2D(256, 3, activation='relu', padding='same', kernel_initializer='he_normal')(merge7)
     conv7 = layers.Conv2D(256, 3, activation='relu', padding='same', kernel_initializer='he_normal')(conv7)
 
-    # up8 = layers.UpSampling2D(size=(2, 2))(conv7)
-    # up8 = layers.Conv2D(128, 2, activation='relu', padding='same', kernel_initializer='he_normal')(up8)
-    up8 = layers.Conv2DTranspose(128, 2, strides=(2, 2), padding='valid', activation='relu',
-                                 kernel_initializer='he_normal')(conv7)
+    up8 = layers.Conv2DTranspose(128, 2, strides=(2, 2), activation='relu', kernel_initializer='he_normal')(conv7)
     merge8 = layers.concatenate([conv2, up8], axis=3)
     conv8 = layers.Conv2D(128, 3, activation='relu', padding='same', kernel_initializer='he_normal')(merge8)
     conv8 = layers.Conv2D(128, 3, activation='relu', padding='same', kernel_initializer='he_normal')(conv8)
 
-    # up9 = layers.UpSampling2D(size=(2, 2))(conv8)
-    # up9 = layers.Conv2D(64, 2, activation='relu', padding='same', kernel_initializer='he_normal')(up9)
-    up9 = layers.Conv2DTranspose(64, 2, strides=(2, 2), padding='valid', activation='relu',
-                                 kernel_initializer='he_normal')(conv8)
+    up9 = layers.Conv2DTranspose(64, 2, strides=(2, 2), activation='relu', kernel_initializer='he_normal')(conv8)
     merge9 = layers.concatenate([conv1, up9], axis=3)
     conv9 = layers.Conv2D(64, 3, activation='relu', padding='same', kernel_initializer='he_normal')(merge9)
     conv9 = layers.Conv2D(64, 3, activation='relu', padding='same', kernel_initializer='he_normal')(conv9)
