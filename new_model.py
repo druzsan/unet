@@ -12,16 +12,17 @@ def double_conv2d(x, filters, kernel_size, padding='same', batch_normalization=F
     :param kernel_size: [integer/tuple] size of convolution kernels
     :param padding: ['valid'/'same'] convolution padding
     :param batch_normalization: [bool] whether to apply optional batch normalization between convolution and ReLU
-    :param dropout_rate: [float] optional dropout rate (dropout is not applied if `dropout_rate=0.0`)
+    :param dropout_rate: [float] optional dropout rate (dropout is not applied if is equal to 0.0)
     :return: [4D tensor] output
     """
+    use_bias = not batch_normalization
     bn_axis = 3 if backend.image_data_format() == 'channels_last' else 1
 
-    x = layers.Conv2D(filters, kernel_size, padding=padding, kernel_initializer='he_normal')(x)
+    x = layers.Conv2D(filters, kernel_size, padding=padding, use_bias=use_bias, kernel_initializer='he_normal')(x)
     if batch_normalization is True:
         x = layers.BatchNormalization(axis=bn_axis, scale=False)(x)
     x = layers.Activation('relu')(x)
-    x = layers.Conv2D(filters, kernel_size, padding=padding, kernel_initializer='he_normal')(x)
+    x = layers.Conv2D(filters, kernel_size, padding=padding, use_bias=use_bias, kernel_initializer='he_normal')(x)
     if batch_normalization is True:
         x = layers.BatchNormalization(axis=bn_axis, scale=False)(x)
     x = layers.Activation('relu')(x)
@@ -34,18 +35,30 @@ def unet(weights=None,
          input_shape=(256, 256, 1),
          classes=1,
          background_as_class=False,
+         up_conv='upsampling',
          batch_normalization=False,
-         dropout_rate=0.):
+         dropout_rate=(0., 0., 0., .5, .5, 0., 0., 0., 0.)):
     """
-    Instantiates the U-Net architecture for Keras
+    Instantiates the U-Net architecture for Keras.
 
-    Note that convolutions in this model have `padding='same'` instead of `padding='valid'` in reference paper
-    in order to have the same input and output shapes
+    Note that convolutions have `padding='same'` argument instead of `padding='valid'` in reference paper in order to
+    have the same input and output shapes. `padding='valid'` is currently not supported.
+
+    Since U-Net is fully-convolutional network, in fact it requires no input height and width, but just the number of
+    channels. However, it can be useful to set input height and width to obtain feature map shapes in `model.summary()`
+
+    Using up-sampling with convolution afterwards instead of transpose convolution can avoid some undesirable artifacts
+    (see e.g. https://distill.pub/2016/deconv-checkerboard/). Bilinear interpolation was chosen as more accurate and
+    the same kernel size as in transpose convolution is used in order to not to increase the number of parameters
+
+    Dropout rates were discussed only briefly in reference paper, default values were therefore taken from the
+    reference Caffe implementation.
 
     :param weights: optional path to the weights file to be loaded (random initialization if `None`)
     :param input_shape: [integer/tuple] optional number of input channels or input shape
     :param classes: [int] optional number of classes to predict
     :param background_as_class: [bool] whether to create additional channel for background class
+    :param up_conv: ['deconvolution'/'upsampling'] how to perform the up-convolution
     :param batch_normalization: [bool] whether to apply batch normalization after each convolution
     :param dropout_rate: [integer/tuple/list] dropout rate to apply to all building blocks or
                          tuple/list of size 9 with block-wise dropout rates
@@ -53,7 +66,6 @@ def unet(weights=None,
     """
 
     if isinstance(input_shape, int):
-        # As U-Net is fully-convolutional network, in fact it requires no input height and width
         if backend.image_data_format() == 'channels_last':
             input_shape = (None, None, input_shape)
         else:
@@ -80,6 +92,11 @@ def unet(weights=None,
         # Some pixel is background if all classes activations in this pixel are nearly zeros
         top_activation = 'sigmoid'
 
+    if up_conv not in ('deconvolution', 'upsampling'):
+        raise ValueError("The `up_conv` argument should be either 'deconvolution' (up-convolution by transposed"
+                         "convolution or so called deconvolution) or 'upsampling' (up-convolution by up-sampling and"
+                         "regular convolution")
+
     if isinstance(dropout_rate, float):
         dropout_rate = [dropout_rate] * 9
     elif not isinstance(dropout_rate, tuple) and not isinstance(dropout_rate, list) or len(dropout_rate) != 9:
@@ -88,50 +105,71 @@ def unet(weights=None,
 
     channel_axis = 3 if backend.image_data_format() == 'channels_last' else 1
 
-    inputs = layers.Input(input_shape)
+    data = layers.Input(input_shape)
 
-    conv1 = double_conv2d(inputs, 64, 3, padding='same',
+    down0 = double_conv2d(data, 64, 3, padding='same',
                           batch_normalization=batch_normalization, dropout_rate=dropout_rate[0])
-    pool1 = layers.MaxPooling2D(pool_size=(2, 2))(conv1)
 
-    conv2 = double_conv2d(pool1, 128, 3, padding='same',
+    down1 = layers.MaxPooling2D(pool_size=(2, 2))(down0)
+    down1 = double_conv2d(down1, 128, 3, padding='same',
                           batch_normalization=batch_normalization, dropout_rate=dropout_rate[1])
-    pool2 = layers.MaxPooling2D(pool_size=(2, 2))(conv2)
 
-    conv3 = double_conv2d(pool2, 256, 3, padding='same',
+    down2 = layers.MaxPooling2D(pool_size=(2, 2))(down1)
+    down2 = double_conv2d(down2, 256, 3, padding='same',
                           batch_normalization=batch_normalization, dropout_rate=dropout_rate[2])
-    pool3 = layers.MaxPooling2D(pool_size=(2, 2))(conv3)
 
-    conv4 = double_conv2d(pool3, 512, 3, padding='same',
+    down3 = layers.MaxPooling2D(pool_size=(2, 2))(down2)
+    down3 = double_conv2d(down3, 512, 3, padding='same',
                           batch_normalization=batch_normalization, dropout_rate=dropout_rate[3])
-    pool4 = layers.MaxPooling2D(pool_size=(2, 2))(conv4)
 
-    conv5 = double_conv2d(pool4, 1024, 3, padding='same',
+    down4 = layers.MaxPooling2D(pool_size=(2, 2))(down3)
+    down4 = double_conv2d(down4, 1024, 3, padding='same',
                           batch_normalization=batch_normalization, dropout_rate=dropout_rate[4])
 
-    up6 = layers.Conv2DTranspose(512, 2, strides=(2, 2), activation='relu', kernel_initializer='he_normal')(conv5)
-    merge6 = layers.concatenate([conv4, up6], axis=channel_axis)
-    conv6 = double_conv2d(merge6, 512, 3, padding='same',
-                          batch_normalization=batch_normalization, dropout_rate=dropout_rate[5])
+    if up_conv == 'deconvolution':
+        up3 = layers.Conv2DTranspose(512, 2, strides=(2, 2), kernel_initializer='he_normal')(down4)
+    else:
+        up3 = layers.UpSampling2D(size=(2, 2), interpolation='bilinear')(down4)
+        up3 = layers.Conv2D(512, 2, padding='same', kernel_initializer='he_normal')(up3)
+    up3 = layers.Activation('relu')(up3)
+    up3 = layers.concatenate([down3, up3], axis=channel_axis)
+    up3 = double_conv2d(up3, 512, 3, padding='same',
+                        batch_normalization=batch_normalization, dropout_rate=dropout_rate[5])
 
-    up7 = layers.Conv2DTranspose(256, 2, strides=(2, 2), activation='relu', kernel_initializer='he_normal')(conv6)
-    merge7 = layers.concatenate([conv3, up7], axis=channel_axis)
-    conv7 = double_conv2d(merge7, 256, 3, padding='same',
-                          batch_normalization=batch_normalization, dropout_rate=dropout_rate[6])
+    if up_conv == 'deconvolution':
+        up2 = layers.Conv2DTranspose(256, 2, strides=(2, 2), kernel_initializer='he_normal')(up3)
+    else:
+        up2 = layers.UpSampling2D(size=(2, 2), interpolation='bilinear')(up3)
+        up2 = layers.Conv2D(256, 2, padding='same', kernel_initializer='he_normal')(up2)
+    up2 = layers.Activation('relu')(up2)
+    up2 = layers.concatenate([down2, up2], axis=channel_axis)
+    up2 = double_conv2d(up2, 256, 3, padding='same',
+                        batch_normalization=batch_normalization, dropout_rate=dropout_rate[6])
 
-    up8 = layers.Conv2DTranspose(128, 2, strides=(2, 2), activation='relu', kernel_initializer='he_normal')(conv7)
-    merge8 = layers.concatenate([conv2, up8], axis=channel_axis)
-    conv8 = double_conv2d(merge8, 128, 3, padding='same',
-                          batch_normalization=batch_normalization, dropout_rate=dropout_rate[7])
+    if up_conv == 'deconvolution':
+        up1 = layers.Conv2DTranspose(128, 2, strides=(2, 2), kernel_initializer='he_normal')(up2)
+    else:
+        up1 = layers.UpSampling2D(size=(2, 2), interpolation='bilinear')(up2)
+        up1 = layers.Conv2D(128, 2, padding='same', kernel_initializer='he_normal')(up1)
+    up1 = layers.Activation('relu')(up1)
+    up1 = layers.concatenate([down1, up1], axis=channel_axis)
+    up1 = double_conv2d(up1, 128, 3, padding='same',
+                        batch_normalization=batch_normalization, dropout_rate=dropout_rate[7])
 
-    up9 = layers.Conv2DTranspose(64, 2, strides=(2, 2), activation='relu', kernel_initializer='he_normal')(conv8)
-    merge9 = layers.concatenate([conv1, up9], axis=channel_axis)
-    conv9 = double_conv2d(merge9, 64, 3, padding='same',
-                          batch_normalization=batch_normalization, dropout_rate=dropout_rate[8])
+    if up_conv == 'deconvolution':
+        up0 = layers.Conv2DTranspose(64, 2, strides=(2, 2), kernel_initializer='he_normal')(up1)
+    else:
+        up0 = layers.UpSampling2D(size=(2, 2), interpolation='bilinear')(up1)
+        up0 = layers.Conv2D(64, 2, padding='same', kernel_initializer='he_normal')(up0)
+    up0 = layers.Activation('relu')(up0)
+    up0 = layers.concatenate([down0, up0], axis=channel_axis)
+    up0 = double_conv2d(up0, 64, 3, padding='same',
+                        batch_normalization=batch_normalization, dropout_rate=dropout_rate[8])
 
-    conv9 = layers.Conv2D(classes, 1, activation=top_activation, padding='same', kernel_initializer='he_normal')(conv9)
+    score = layers.Conv2D(classes, 1, padding='same', kernel_initializer='he_normal')(up0)
+    score = layers.Activation(top_activation)(score)
 
-    model = models.Model(inputs, conv9)
+    model = models.Model(data, score)
 
     if weights is not None:
         model.load_weights(weights)

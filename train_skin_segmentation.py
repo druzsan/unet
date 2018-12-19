@@ -1,54 +1,66 @@
-# Try to make the training reproducible
-seed = 0
-import numpy as np
-np.random.seed(seed)
+import os
+import datetime
+import json
 import random as rn
-rn.seed(seed)
+import numpy as np
 import tensorflow as tf
+from keras import backend, callbacks, optimizers
+from keras.preprocessing.image import ImageDataGenerator
+
+from new_model import unet
+from custom_losses import image_binary_crossentropy, image_categorical_crossentropy
+from custom_callbacks import TestPredictor
+from data import ImageMaskGenerator, preprocess_image, preprocess_mask
+
+# Try to make the training reproducible (at least in terms of training data)
+seed = 0
+np.random.seed(seed)
+rn.seed(seed)
 tf.set_random_seed(seed)
 
 # Setup allocating only as much GPU memory as needed
-config = tf.ConfigProto()
-config.gpu_options.allow_growth = True
-session = tf.Session(graph=tf.get_default_graph(), config=config)
-from keras import backend
+tf_config = tf.ConfigProto()
+tf_config.gpu_options.allow_growth = True
+session = tf.Session(graph=tf.get_default_graph(), config=tf_config)
 backend.tensorflow_backend.set_session(session)
 
-import os
-import datetime
-from keras import optimizers, losses, metrics, callbacks
-from keras.preprocessing.image import ImageDataGenerator
-
-from model import unet
-from losses import image_binary_crossentropy, image_categorical_crossentropy
-from callbacks import TestPredictor
-from data import ImageMaskGenerator, preprocess_image, preprocess_mask
-
-# Adjustable hyperparameters
+# Preprocessing parameters
+height, width, channels = 480, 640, 3
 normalize_lighting = True
 min_value, max_value = 0., 1.
-augmentation_args = dict(
-    rotation_range=0.2,
-    width_shift_range=0.05,
-    height_shift_range=0.05,
-    shear_range=0.05,
-    zoom_range=0.05,
-    horizontal_flip=True,
-    fill_mode='nearest'
-)
 background_as_class = True
-use_custom_losses = False
+augmentation_args = dict(
+    rotation_range=36,
+    width_shift_range=0.1,
+    height_shift_range=0.1,
+    shear_range=0.1,
+    zoom_range=0.1,
+    horizontal_flip=True,
+    # fill_mode='nearest',
+    fill_mode='constant',
+    cval=0.
+)
+# U-Net parameters
+unet_args = dict(
+    input_shape=(height, width, channels),
+    classes=1,
+    background_as_class=background_as_class,
+    # up_conv="deconvolution",
+    up_conv="upsampling",
+    batch_normalization=False,
+    # dropout_rate=(0., 0., 0., .5, .5, 0., 0., 0., 0.)
+    dropout_rate=(0., .1, .3, .5, .5, .3, .1, 0., 0.)
+)
+# Training parameters
+use_custom_losses = True
 optimizer = optimizers.Adam(lr=1e-4)
+data_dir = "data/skin/revised1"
 epochs = 100
 train_batchsize = 2
-
 # Other parameters
-data_dir = "data/skin/revised"
 train_dir = os.path.join(data_dir, "train")
 validation_dir = os.path.join(data_dir, "validation")
 test_dir = os.path.join(data_dir, "test")
-height, width, channels = 480, 640, 3
-classes = 1
 validation_batchsize = 1
 test_batchsize = 1
 image_preprocessing = preprocess_image(normalize_lighting=normalize_lighting, min_value=min_value, max_value=max_value)
@@ -62,6 +74,15 @@ results_dir = os.path.join("results", run_name)
 if not os.path.isdir(results_dir):
     print("Create directory " + results_dir + " for saving results")
     os.makedirs(results_dir)
+config = dict(height=height, width=width, channels=channels, normalize_lighting=normalize_lighting,
+              min_value=min_value, max_value=max_value, background_as_class=background_as_class,
+              augmentation_args=augmentation_args, unet_args=unet_args, use_custom_losses=use_custom_losses,
+              optimizer=optimizers.serialize(optimizer), seed=seed, data_dir=data_dir, epochs=epochs,
+              train_batchsize=train_batchsize)
+with open(os.path.join(weights_dir, "config.json"), "w") as file:
+    json.dump(config, file, indent=4)
+with open(os.path.join(results_dir, "config.json"), "w") as file:
+    json.dump(config, file, indent=4)
 
 print("\nTrain dataset statistics:")
 train_generator = ImageMaskGenerator(
@@ -104,37 +125,23 @@ test_generator = ImageDataGenerator(preprocessing_function=image_preprocessing).
     shuffle=False
 )
 
-model = unet(
-    input_size=(height, width, channels),
-    classes=classes,
-    background_as_class=background_as_class
-)
-if background_as_class is True:
-    if use_custom_losses is True:
-        loss = image_categorical_crossentropy
-    else:
-        loss = losses.categorical_crossentropy
-    metric = metrics.categorical_accuracy
-    metric_name = "categorical_accuracy"
+model = unet(**unet_args)
+if use_custom_losses is True:
+    loss = image_categorical_crossentropy if background_as_class is True else image_binary_crossentropy
 else:
-    if use_custom_losses is True:
-        loss = image_binary_crossentropy
-    else:
-        loss = losses.binary_crossentropy
-    metric = metrics.binary_accuracy
-    metric_name = "binary_accuracy"
-model.compile(optimizer=optimizer, loss=loss, metrics=[metric])
-# model.summary()
+    loss = "categorical_crossentropy" if background_as_class is True else "binary_crossentropy"
+model.compile(optimizer=optimizer, loss=loss, metrics=["acc"])
+model.summary()
 
 callbacks = [
-    callbacks.ModelCheckpoint(os.path.join(weights_dir, 'best_loss.hdf5'),
-                              monitor="loss", verbose=1, save_best_only=True),
-    callbacks.ModelCheckpoint(os.path.join(weights_dir, 'best_acc.hdf5'),
-                              monitor=metric_name, verbose=1, save_best_only=True),
-    callbacks.ModelCheckpoint(os.path.join(weights_dir, 'best_val_loss.hdf5'),
-                              monitor="val_loss", verbose=1, save_best_only=True),
-    callbacks.ModelCheckpoint(os.path.join(weights_dir, 'best_val_acc.hdf5'),
-                              monitor="val_" + metric_name, verbose=1, save_best_only=True),
+    callbacks.ModelCheckpoint(os.path.join(weights_dir, 'best_loss.hdf5'), monitor="loss",
+                              verbose=1, save_best_only=True, save_weights_only=False),
+    callbacks.ModelCheckpoint(os.path.join(weights_dir, 'best_acc.hdf5'), monitor="acc",
+                              verbose=1, save_best_only=True, save_weights_only=False),
+    callbacks.ModelCheckpoint(os.path.join(weights_dir, 'best_val_loss.hdf5'), monitor="val_loss",
+                              verbose=1, save_best_only=True, save_weights_only=False),
+    callbacks.ModelCheckpoint(os.path.join(weights_dir, 'best_val_acc.hdf5'), monitor="val_acc",
+                              verbose=1, save_best_only=True, save_weights_only=False),
     TestPredictor(test_generator, results_dir, save_prefix="out-", background_as_class=background_as_class)
 ]
 
@@ -148,10 +155,11 @@ history = model.fit_generator(
     validation_data=validation_generator,
     validation_steps=validation_generator.samples / validation_generator.batch_size
 )
+model.save(os.path.join(weights_dir, 'last_epoch.hdf5'))
 print("Train loss:", history.history["loss"])
-print("Train accuracy:", history.history[metric_name])
-print("Train validation loss:", history.history["val_loss"])
-print("Train validation accuracy:", history.history["val_" + metric_name])
+print("Train acc:", history.history["acc"])
+print("Train val loss:", history.history["val_loss"])
+print("Train val acc:", history.history["val_acc"])
 
 print("\nEvaluation")
 evaluation = model.evaluate_generator(
@@ -160,4 +168,26 @@ evaluation = model.evaluate_generator(
     verbose=1
 )
 print("Evaluation loss:", evaluation[0])
-print("Evaluation accuracy:", evaluation[1])
+print("Evaluation acc:", evaluation[1])
+
+if use_custom_losses is True:
+    best_loss_epoch, best_sum_loss = min(enumerate(history.history["loss"]), key=lambda x: x[1])
+    best_val_loss_epoch, best_val_sum_loss = min(enumerate(history.history["val_loss"]), key=lambda x: x[1])
+    best_mean_loss, best_val_mean_loss = best_sum_loss / height / width, best_val_sum_loss / height / width
+    eval_mean_loss, eval_sum_loss = evaluation[0] / height / width, evaluation[0]
+else:
+    best_loss_epoch, best_mean_loss = min(enumerate(history.history["loss"]), key=lambda x: x[1])
+    best_val_loss_epoch, best_val_mean_loss = min(enumerate(history.history["val_loss"]), key=lambda x: x[1])
+    best_sum_loss, best_val_sum_loss = best_mean_loss * height * width, best_val_mean_loss * height * width
+    eval_mean_loss, eval_sum_loss = evaluation[0], evaluation[0] * height * width
+best_acc_epoch, best_acc = max(enumerate(history.history["acc"]), key=lambda x: x[1])
+best_val_acc_epoch, best_val_acc = max(enumerate(history.history["val_acc"]), key=lambda x: x[1])
+results = dict(best_loss=dict(mean=best_mean_loss, sum=best_sum_loss, epoch=best_loss_epoch + 1),
+               best_acc=dict(acc=best_acc, epoch=best_acc_epoch + 1),
+               best_val_loss=dict(mean=best_val_mean_loss, sum=best_val_sum_loss, epoch=best_val_loss_epoch + 1),
+               best_val_acc=dict(acc=best_val_acc, epoch=best_val_acc_epoch + 1),
+               eval_loss=dict(mean=eval_mean_loss, sum=eval_sum_loss), eval_acc=dict(acc=evaluation[1]),
+               loss=history.history["loss"], acc=history.history["acc"],
+               val_loss=history.history["val_loss"], val_acc=history.history["val_acc"])
+with open(os.path.join(results_dir, "results.json"), "w") as file:
+    json.dump(results, file, indent=4)
